@@ -1,229 +1,121 @@
-# TezEdge
+# Description
+
+Your task is to reverse-engineer/debug our current implementation of merke_tree
+storage and replace key-value store (rocks-db) with in memory Rust based data structure and one persistent key-value store
+
+Please develop your solution focusing on the following aspects:
+> - The solution must be available as a Git repository which can be accessed by the solution reviewers. Please fork https://github.com/simplestaking/tezedge
+
+I believe It is as you are reading this doc [https://github.com/mateuszaaa/tezedge](https://github.com/mateuszaaa/tezedge)
+
+> - The solution reviewers must be able to build the project for testing and benchmarking.
+
+~~~
+$ cd tezedge/storage
+$ cargo build
+$ cargo test --color=always --package storage --lib merkle_storage::tests
+  
+running 14 tests
+test merkle_storage::tests::get_test ... ok
+test merkle_storage::tests::test_commit_hash ... ok
+test merkle_storage::tests::test_copy ... ok
+test merkle_storage::tests::test_db_error ... ok
+test merkle_storage::tests::test_delete ... ok
+test merkle_storage::tests::test_delete_in_separate_commit ... ok
+test merkle_storage::tests::test_get_errors ... ok
+test merkle_storage::tests::test_deleted_entry_available ... ok
+test merkle_storage::tests::test_multiple_commit_hash ... ok
+test merkle_storage::tests::test_persistence_over_reopens ... ok
+test merkle_storage::tests::test_persitent_storage ... ok
+test merkle_storage::tests::test_tree_hash ... ok
+test merkle_storage::tests::test_checkout ... ok
+test merkle_storage::tests::test_both_storages_returns_the_same_hashes ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 33 filtered out
+~~~
+
+> - The solution must pass all existing tests https://github.com/simplestaking/tezedge/blob/7d59ea35ec07e86c34f4e2782d8d89f73aaa57aa/storage/src/merkle_storage.rs
+
+as above
+
+> The solution must contain at least one extra unit test.
+
+I added one used for checking compatibility of rocket_db and in_memory implementations. Also benchmarks may be consider as some sort of tests.
+
+> - The solution must contain at least one performance benchmark.
+
+I added few to compare 'old' and 'new' in memory implementation. I modeled paths for two scenarios:
+
+- sparse 'binary' tree where each non-leaf node has 2 childs:
+    -  with 'commit' call after each 'set'
+    -  with single 'commit' call after all 'set' calls
+- dense tree where each non-leaf node has 10 childs
+    -  with 'commit' call after each 'set'
+    -  with single 'commit' call after all 'set' calls
+
+~~~
+$ cd tezedge/storage
+$ cargo bench
+test merkle_storage::benchmarking::bench_in_memory_1000_elements_binary_tree              ... bench:  60,000,591 ns/iter (+/- 2,033,952)
+test merkle_storage::benchmarking::bench_in_memory_1000_elements_binary_tree_many_commits ... bench: 139,680,808 ns/iter (+/- 5,969,031)
+test merkle_storage::benchmarking::bench_in_memory_1000_elements_dense_tree               ... bench:  16,931,198 ns/iter (+/- 748,995)
+test merkle_storage::benchmarking::bench_in_memory_1000_elements_dense_tree_many_commits  ... bench:  41,569,112 ns/iter (+/- 1,830,468)
+test merkle_storage::benchmarking::bench_rocket_1000_elements_binary_tree                 ... bench:  66,949,413 ns/iter (+/- 1,746,483)
+test merkle_storage::benchmarking::bench_rocket_1000_elements_binary_tree_many_commits    ... bench: 342,213,445 ns/iter (+/- 16,693,535)
+test merkle_storage::benchmarking::bench_rocket_1000_elements_dense_tree                  ... bench:  23,945,279 ns/iter (+/- 1,267,700)
+test merkle_storage::benchmarking::bench_rocket_1000_elements_dense_tree_many_commits     ... bench:  69,181,757 ns/iter (+/- 3,534,702)
+~~~
+
+- The solution must replace key-value store with in memory Rust based data structure ( for example BTreeMap ) and one persistent key-value store ( for example Sled )
+
+In my opinion BTreeMap is more efficient in that scenario as we dont care that much about ordering. Eventually i used Sled but it seems to be an overkill
+in that particular scenario. Storing mappings in a simple file instead would be enough in my opinion.
+
+In my approach i came up with generic `MerkleStorageGeneric` that has all the common methods for both 'old' and 'new' impl
+
+~~~rust
+pub struct MerkleStorageGeneric<Backend: MerkleStorageStorageBackend> {
+    current_stage_tree: Option<Tree>,
+    db: Backend,
+    staged: HashMap<EntryHash, Entry>,
+    last_commit: Option<Commit>,
+    map_stats: MerkleMapStats,
+    cumul_set_exec_time: f64, // divide this by the next field to get avg time spent in _set
+    set_exec_times: u64,
+    set_exec_times_to_discard: u64, // first N measurements to discard
+}
+~~~
+
+My intention was to not implement `KeyValueStoreWithSchema` for in memory implementation. The main problem with that one
+is fact that it comes from third party library and is used in many places in the code so function signatures cannot be
+modified easily. What is more `set`, `get` operates on serialized (bytes) data and in my solution i wanted to avoid
+serialization/deserialization cost(and i believe did that),
+  
+i also created `MerkleStorageStorageBackend` that has solution specific implementation
+
+~~~rust
+pub trait MerkleStorageStorageBackend {
+
+    fn create_transaction(&self) -> WriteTransaction;
+
+    fn execute_transaction(& self, t: WriteTransaction) -> Result<(),MerkleError>;
 
-[![Build Status]][Build Link] [![Drone Status]][Drone Link]   [![Docs Status]][docs Link] [![Changelog][changelog-badge]][changelog] [![release-badge]][release-link] [![MIT licensed]][MIT link]
+    fn get_value(&self,key: &EntryHash) -> Option<Entry>;
+}
+~~~
+   
+> - Both the solution itself and its code must be reasonably structured.
 
+I hope it is. I tried to use self descriptive names for both functions and variables. I also tried to implement changes in
+such way that diff against origin version looks readable - to help you guys tracking differences.
 
-[Build Status]: https://travis-ci.com/simplestaking/tezedge.svg?branch=master
-[Build Link]: https://travis-ci.com/simplestaking/tezedge
+> - A short README file in the root of the project must explain how to build, test and benchmark solutions. Please replace the current README file with your explanation.
+done
 
-[Drone Status]: https://img.shields.io/drone/build/simplestaking/tezedge?server=http%3A%2F%2Fci.tezedge.com
-[Drone Link]: http://ci.tezedge.com/simplestaking/tezedge/
+# Notes
 
-[Docs Status]: https://img.shields.io/badge/user--docs-master-informational
-[Docs Link]: http://docs.tezedge.com/
+- In memory implemenatation is faster (that one was kind of obvious from the begining)
+- Sled is an overkill for storing data - simple file would work as well
+- i kind of failed to implement `WriteTransaction` as  `Vec<(EntryHash, &Entry)>`. That was mainly because of recursive function. I'm preety sure that it can be improved ...
+- i didn't test concurrent access to file storage (as in origin rocket\_db implementation) - that should be added for production level code
 
-[RustDoc Status]:https://img.shields.io/badge/code--docs-master-orange
-
-[MIT licensed]: https://img.shields.io/badge/license-MIT-blue.svg
-[MIT link]: https://github.com/simplestaking/tezedge/blob/master/LICENSE
-
-[changelog]: ./CHANGELOG.md
-[changelog-badge]: https://img.shields.io/badge/changelog-Changelog-%23E05735
-
-[release-badge]: https://img.shields.io/github/v/release/simplestaking/tezedge
-[release-link]: https://github.com/simplestaking/tezedge/releases/latest
-
-The purpose of this project is to implement a secure, trustworthy, open-source Tezos node in Rust.
-In addition to implementing a new node, the project seeks to maintain and improve the Tezos node wherever possible.
-
-[Documentation][Docs Link]
-
-Quick start
-------------
-
-
-**Pre-requisites**
-
-* GitHub repository
-
-* Docker
-
-**1. Open shell and type this code into the command line and then press Enter**
-
-```
-git clone https://github.com/simplestaking/tezedge
-cd tezedge
-```
-
-**2. Download and install Docker and Docker Compose**
-
-Open shell and type this code into the command line and then press Enter:
-
-```
-docker-compose pull
-docker-compose up
-```
-
-![alt text](https://raw.githubusercontent.com/simplestaking/tezedge/master/docs/images/node_bootstrap.gif)
-
-**Docker for Windows**
-
-Images use hostname `localhost` to access running services.
-When using docker for windows, check, please:
-```
-docker-machine ip
-```
-and make sure that port forwarding is set up correctly for docker.
-
-**3. Open the TezEdge Explorer in your browser**
-
-You can view the status of the node in your browser by entering this address into your browser's URL bar:
-
-http://localhost:8080
-
-![alt text](https://raw.githubusercontent.com/simplestaking/tezedge/master/docs/images/tezedge_explorer.gif)
-
-Building from Source
-------------
-
-**1. Install rustup command**
-
-We recommend installing Rust through rustup.
-
-Run the following in your terminal, then follow the onscreen instructions.
-
-```
-curl https://sh.rustup.rs -sSf | sh
-```
-
-**2. Install rust toolchain**
-
-Rust nightly is required to build this project.
-```
-rustup toolchain install nightly-2020-07-12
-rustup default nightly-2020-07-12
-```
-
-**3. Install required libs**
-
-Install libs required to build sodiumoxide package:
-```
-sudo apt install pkg-config libsodium-dev
-```
-
-Install libs required to build RocksDB package:
-```
-sudo apt install clang libclang-dev llvm llvm-dev linux-kernel-headers libev-dev
-```
-
-In OSX, using [Homebrew](https://brew.sh/):
-```
-brew install pkg-config gmp libev libsodium hidapi
-```
-
-Install libs required to build sandbox:
-```
-sudo apt install libhidapi-dev
-```
-
-**4. Supported Linux distributions**
-
-We are linking rust code with pre-compiled Tezos shared library. For your convenience we have created pre-compiled binary files
-for most of the popular linux distributions:
-
-supported linux distributions:
-* Ubuntu (16.04, 18.04, 18.10, 19.04, 19.10, 20.04, 20.10)
-* Debian (9, 10 )
-* OpenSUSE (15.1, 15.2)
-* CentOS (7, 8)
-
-If you are missing support for your favorite linux distribution on a poll request at [tezos-opam-builder](https://github.com/simplestaking/tezos-opam-builder) project.
-
-**5. Supported MacOS versions**
-
-Versions newer or equal to 10.13 should work.
-
-Running node manually
-----------------
-
-The node can built through the `cargo build` or `cargo build --release`, be aware, release build can take
-much longer to compile. environment variable `SODIUM_USE_PKG_CONFIG=1` mus be set. Put together, node can be build, for example, like this:
-```
-SODIUM_USE_PKG_CONFIG=1 cargo build
-```
-
-To run node manually, path to the Tezos lib must be provided as environment variable `LD_LIBRARY_PATH`. It is required
-by `protocol-runner`. Put together, node can be run, for example, like this:
-```
-LD_LIBRARY_PATH=./tezos/interop/lib_tezos/artifacts cargo run --bin light-node -- --config-file ./light_node/etc/tezedge/tezedge.config
-```
-
-All parameters can be provided also as command line arguments in the same format as in config file, in which case
-they have higher priority than the ones in config file. For example we can use the default config and change the log file path:
-```
-LD_LIBRARY_PATH=./tezos/interop/lib_tezos/artifacts cargo run --bin light-node -- --config-file ./light_node/etc/tezedge/tezedge.config --log-file /tmp/logs/tezdge.log
-```
-
-Full description of all arguments is in the light_node [README](light_node/README.md) file.
-
-
-
-Running node using run.sh script
-----------------
-
-
-On linux systems, we prepared convenience script to run the node. It will automatically set all necessary environmnent variables, build and run tezedge node.
-All arguments can be provided to the `run.sh` script in the same manner as described in the previous section - Running Tezedge node manually.
-
-The following command will execute node in debug node:
-
-```
-./run.sh node
-```
-
-To run node in release mode execute the following:
-
-```
-./run.sh release
-```
-
-If you are running OSX you can use docker version:
-
-```
-./run.sh docker
-```
-
-Listening for updates. Node emits statistics on the websocket server, which can be changed by `--websocket-address` argument, for example:
-
-```
-./run.sh node --websocket-address 0.0.0.0:12345
-```
-
-Example of how to call the RPC
-----------------
-
-Open shell and type this code into the command line and then press Enter:
-
-```curl localhost:18732/chains/main/blocks/head```
-
-For a more detailed description of RPCs, see the [shell](https://docs.tezedge.com/endpoints/shell) and the [protocol](https://docs.tezedge.com/endpoints/protocol) endpoints.
-
-Prearranged docker-compose files
-----------------
-
-### light-node + tezedge-explorer
-* Run last released version:
-```
-docker-compose -f docker-compose.yml pull
-docker-compose -f docker-compose.yml up
-```
-* Run actual development version:
-```
-docker-compose -f docker-compose.latest.yml pull
-docker-compose -f docker-compose.latest.yml up
-```
-
-### sandbox launcher + tezedge-explorer + tezedge-debugger
-* Run last released version:
-```
-docker-compose -f docker-compose.sandbox.yml pull
-docker-compose -f docker-compose.sandbox.yml up
-```
-* Run actual development version:
-```
-docker-compose -f docker-compose.sandbox.latest.yml pull
-docker-compose -f docker-compose.sandbox.latest.yml up
-
-# stop and remove docker volume
-docker-compose -f docker-compose.sandbox.latest.yml down -v
-```

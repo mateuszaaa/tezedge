@@ -3,6 +3,12 @@
 #![forbid(unsafe_code)]
 #![feature(const_fn)]
 
+// both MerkleStorage and MerkleStorageInMemeory are private structs to save some time below
+// allows to implements benchmarks in source files with access to private implementation
+// not the best idea for production code but still shortcut for performance evalutation
+#![feature(test)]
+
+
 use std::convert::TryInto;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,7 +30,7 @@ pub use crate::block_storage::{BlockAdditionalData, BlockAdditionalDataBuilder, 
 pub use crate::chain_meta_storage::ChainMetaStorage;
 pub use crate::context_action_storage::{ContextActionByBlockHashKey, ContextActionRecordValue, ContextActionStorage};
 pub use crate::mempool_storage::{MempoolStorage, MempoolStorageKV};
-use crate::merkle_storage::MerkleStorage;
+use crate::merkle_storage::MerkleStorageSchema;
 pub use crate::operations_meta_storage::{OperationsMetaStorage, OperationsMetaStorageKV};
 pub use crate::operations_storage::{OperationKey, OperationsStorage, OperationsStorageKV, OperationsStorageReader};
 use crate::persistent::{CommitLogError, DBError, Decoder, Encoder, SchemaError};
@@ -408,7 +414,7 @@ pub mod tests_common {
                 context_action_storage::ContextActionByBlockHashIndex::descriptor(&cache),
                 context_action_storage::ContextActionByContractIndex::descriptor(&cache),
                 context_action_storage::ContextActionByTypeIndex::descriptor(&cache),
-                MerkleStorage::descriptor(&cache),
+                MerkleStorageSchema::descriptor(&cache),
                 SystemStorage::descriptor(&cache),
                 Sequences::descriptor(&cache),
                 DatabaseBackedSkipList::descriptor(&cache),

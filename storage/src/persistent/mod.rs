@@ -13,7 +13,7 @@ pub use database::{DBError, KeyValueStoreWithSchema};
 pub use schema::{CommitLogDescriptor, CommitLogSchema, KeyValueSchema};
 
 use crate::persistent::sequence::Sequences;
-use crate::merkle_storage::MerkleStorage;
+use crate::merkle_storage::{MerkleStorage, MerkleStorageInMemory};
 
 pub mod sequence;
 pub mod codec;
@@ -167,7 +167,56 @@ impl PersistentStorage {
     }
 }
 
+// That one is not really used but i've added it to demonstrate
+// that Implemented InMemoryStorage fits into existing design and
+// can be use as kind drop & replace for existing PersistentStorage
 impl Drop for PersistentStorage {
+    fn drop(&mut self) {
+        self.flush_dbs();
+    }
+}
+
+#[derive(Clone)]
+pub struct PersistentStorageInMemory {
+    /// commit log store
+    clog: Arc<CommitLogs>,
+    /// autoincrement  id generators
+    seq: Arc<Sequences>,
+    /// merkle-tree based context storage
+    merkle: Arc<RwLock<MerkleStorageInMemory>>,
+}
+
+impl PersistentStorageInMemory {
+    pub fn new(kv: Arc<DB>, clog: Arc<CommitLogs>) -> Self {
+        let seq = Arc::new(Sequences::new(kv.clone(), 1000));
+        Self {
+            clog,
+            seq,
+            merkle: Arc::new(RwLock::new(MerkleStorageInMemory::new())),
+        }
+    }
+
+    #[inline]
+    pub fn clog(&self) -> Arc<CommitLogs> {
+        self.clog.clone()
+    }
+
+    #[inline]
+    pub fn seq(&self) -> Arc<Sequences> {
+        self.seq.clone()
+    }
+
+    #[inline]
+    pub fn merkle(&self) -> Arc<RwLock<MerkleStorageInMemory>> {
+        self.merkle.clone()
+    }
+
+    pub fn flush_dbs(&mut self) {
+        self.clog.flush().expect("Failed to flush commit logs");
+    }
+}
+
+impl Drop for PersistentStorageInMemory {
     fn drop(&mut self) {
         self.flush_dbs();
     }
